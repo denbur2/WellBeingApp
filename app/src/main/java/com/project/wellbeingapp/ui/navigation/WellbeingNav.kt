@@ -128,7 +128,13 @@ fun WellbeingNav(container: AppContainer) {
                     )
                 }
                 composable(Dest.Settings.route) {
-                    SettingsScreen(onAddPoints = container.devSettings::add)
+                    val trackingEnabled by container.appPreferences.trackingEnabled.collectAsState()
+                    SettingsScreen(
+                        trackingEnabled = trackingEnabled,
+                        onSetTracking = container.appPreferences::setTrackingEnabled,
+                        onResetData = { scope.launch { container.clearAllData() } },
+                        onAddPoints = container.devSettings::add
+                    )
                 }
             }
         }

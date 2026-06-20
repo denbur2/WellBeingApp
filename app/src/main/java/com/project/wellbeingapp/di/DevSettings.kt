@@ -12,4 +12,9 @@ class DevSettings {
     val bonusPoints = MutableStateFlow(0)
 
     fun add(delta: Int) = bonusPoints.update { it + delta }
+
+    /** Bonus zurücksetzen (Teil des Daten-Resets). */
+    fun reset() {
+        bonusPoints.value = 0
+    }
 }

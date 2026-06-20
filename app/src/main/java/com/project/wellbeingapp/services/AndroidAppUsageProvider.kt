@@ -26,41 +26,74 @@ class AndroidAppUsageProvider(
     /** Eigenes Paket: wird gar nicht erst erfasst (kein Selbst-Tracking). */
     private val ownPackage: String = appContext.packageName
 
-    override suspend fun getUsageSince(startTime: Long): List<AppUsageSample> =
+    override suspend fun getUsageSince(
+        startTime: Long,
+        foregroundAtStart: String?
+    ): UsageSnapshot =
         withContext(Dispatchers.IO) {
             val now = System.currentTimeMillis()
-            // queryEvents statt queryUsageStats: liefert EXAKT die Vordergrund-Zeit im
-            // Fenster [startTime, now]. queryUsageStats würde über INTERVAL_BEST den
+            // queryEvents statt queryUsageStats: liefert die exakten Vordergrund-Events
+            // im Fenster [startTime, now]. queryUsageStats würde über INTERVAL_BEST den
             // ganzen Tages-Bucket zurückgeben und bei Minuten-Ticks massiv überzählen.
             val events = usageStatsManager.queryEvents(startTime, now)
 
-            val foregroundSince = HashMap<String, Long>() // pkg -> resume-Zeitpunkt
+            // Android hat zu jedem Zeitpunkt GENAU eine Vordergrund-App. Wir verfolgen
+            // sie als einzigen Zustand und schreiben bei jedem Wechsel das gerade
+            // abgeschlossene Intervall fort. Das ist wichtig für durchgehende Sessions:
+            // liegt das Öffnen-Event vor dem Fenster (per [foregroundAtStart] geseedet)
+            // oder im Fenster, wird die ganze Dauer bis zum nächsten Wechsel (bzw. bis
+            // `now`) gezählt — auch wenn dazwischen minutenlang KEIN Event kommt.
             val totals = HashMap<String, Long>()
             val event = UsageEvents.Event()
+
+            // Aktuell vorderste App + seit wann. Mit [foregroundAtStart] geseedet und ab
+            // `startTime` gezählt, damit eine schon laufende Session lückenlos weiterzählt.
+            var currentPkg: String? = foregroundAtStart
+            var currentSince = startTime
+
+            fun accumulate(pkg: String?, from: Long, to: Long) {
+                if (pkg == null) return
+                val dur = (to - from).coerceAtLeast(0)
+                if (dur > 0) totals[pkg] = (totals[pkg] ?: 0L) + dur
+            }
 
             while (events.hasNextEvent()) {
                 events.getNextEvent(event)
                 val pkg = event.packageName ?: continue
                 @Suppress("DEPRECATION") // MOVE_TO_* funktioniert ab API 21 (minSdk 24)
                 when (event.eventType) {
-                    UsageEvents.Event.MOVE_TO_FOREGROUND ->
-                        foregroundSince[pkg] = event.timeStamp
+                    UsageEvents.Event.MOVE_TO_FOREGROUND -> {
+                        // Wechsel: bisherige Vordergrund-App bis hierher gutschreiben.
+                        accumulate(currentPkg, currentSince, event.timeStamp)
+                        currentPkg = pkg
+                        currentSince = event.timeStamp
+                    }
 
-                    UsageEvents.Event.MOVE_TO_BACKGROUND -> {
-                        val start = foregroundSince.remove(pkg) ?: startTime
-                        totals[pkg] = (totals[pkg] ?: 0L) + (event.timeStamp - start).coerceAtLeast(0)
+                    UsageEvents.Event.MOVE_TO_BACKGROUND -> when (currentPkg) {
+                        // Open-Event lag vor dem Fenster → seit Fensterstart gutschreiben.
+                        null -> {
+                            accumulate(pkg, currentSince, event.timeStamp)
+                            currentSince = event.timeStamp
+                        }
+                        pkg -> {
+                            accumulate(currentPkg, currentSince, event.timeStamp)
+                            currentPkg = null
+                            currentSince = event.timeStamp
+                        }
+                        // Background einer App, die wir nicht als vorn führen: ignorieren.
+                        else -> Unit
                     }
                 }
             }
-            // Apps, die am Fensterende noch im Vordergrund sind (kein Background-Event).
-            for ((pkg, start) in foregroundSince) {
-                totals[pkg] = (totals[pkg] ?: 0L) + (now - start).coerceAtLeast(0)
-            }
+            // Am Fensterende noch offene Vordergrund-App bis `now` gutschreiben.
+            accumulate(currentPkg, currentSince, now)
 
-            totals
+            val samples = totals
                 .filterKeys { it != ownPackage }
                 .filterValues { it > 0 }
                 .map { (pkg, dur) -> AppUsageSample(pkg, resolveAppName(pkg), dur) }
+            // currentPkg = am Fensterende vorderste App → Seed für den nächsten Tick.
+            UsageSnapshot(samples = samples, foregroundAtEnd = currentPkg)
         }
 
     override suspend fun getScreenOffMillis(start: Long, end: Long): Long =

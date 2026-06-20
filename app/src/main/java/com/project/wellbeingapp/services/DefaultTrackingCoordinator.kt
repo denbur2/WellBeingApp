@@ -35,9 +35,17 @@ class DefaultTrackingCoordinator(
     private var job: Job? = null
     private var lastTick: Long = 0L
 
+    /**
+     * App, die beim letzten Tick am Fensterende im Vordergrund war. Wird in den
+     * nächsten [AppUsageProvider.getUsageSince]-Aufruf gegeben, damit durchgehende
+     * Sessions auch in ereignislosen Minuten lückenlos gezählt werden.
+     */
+    private var foreground: String? = null
+
     override fun start() {
         if (job?.isActive == true) return
         lastTick = System.currentTimeMillis() - intervalMillis
+        foreground = null
         job = scope.launch {
             while (isActive) {
                 tick()
@@ -65,7 +73,8 @@ class DefaultTrackingCoordinator(
             )
         )
 
-        appUsageProvider.getUsageSince(lastTick).forEach { sample ->
+        val snapshot = appUsageProvider.getUsageSince(lastTick, foreground)
+        snapshot.samples.forEach { sample ->
             appUsageDao.insert(
                 AppUsageEntry(
                     timestamp = now,
@@ -76,6 +85,8 @@ class DefaultTrackingCoordinator(
             )
         }
 
+        // Vordergrund-App für den nächsten Tick merken (Seed).
+        foreground = snapshot.foregroundAtEnd
         lastTick = now
     }
 }

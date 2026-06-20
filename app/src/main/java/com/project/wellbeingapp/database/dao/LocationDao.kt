@@ -19,6 +19,14 @@ interface LocationDao {
     @Query("SELECT * FROM location_entries WHERE timestamp BETWEEN :start AND :end ORDER BY timestamp ASC")
     fun getByTimeRange(start: Long, end: Long): Flow<List<LocationEntry>>
 
+    /** Frühester Tracking-Zeitpunkt im Bereich (reaktiv); `null`, wenn keine Zeile. */
+    @Query("SELECT MIN(timestamp) FROM location_entries WHERE timestamp BETWEEN :start AND :end")
+    fun observeEarliestTimestamp(start: Long, end: Long): Flow<Long?>
+
+    /** Frühester Tracking-Zeitpunkt im Bereich (einmalig); `null`, wenn keine Zeile. */
+    @Query("SELECT MIN(timestamp) FROM location_entries WHERE timestamp BETWEEN :start AND :end")
+    suspend fun earliestTimestamp(start: Long, end: Long): Long?
+
     @Query("DELETE FROM location_entries WHERE timestamp < :timestamp")
     suspend fun deleteOlderThan(timestamp: Long)
 }

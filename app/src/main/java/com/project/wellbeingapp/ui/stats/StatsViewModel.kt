@@ -20,8 +20,12 @@ import kotlinx.coroutines.flow.stateIn
 /**
  * Mappt die App-Nutzung im gewählten [TimeRange] auf ein nach Bildschirmzeit
  * sortiertes Ranking und ermittelt zusätzlich die Bildschirm-Aus-Zeit.
- * Die Aggregation liegt in [AppUsageStats] (rein/testbar). Der Zeitraum ist
- * per [selectRange] zwischen Tag und Woche umschaltbar.
+ *
+ * Das App-Ranking kommt aus den getrackten Minuten-Zeilen ([AppUsageDao],
+ * Aggregation in [AppUsageStats]). So sind die Stats konsistent mit Score und
+ * Heatmap und reagieren auf Tracking-Schalter und Daten-Reset (reaktiver
+ * DB-Flow). Die Bildschirm-Aus-Zeit hat keine DB-Quelle und kommt weiterhin vom
+ * System. Der Zeitraum ist per [selectRange] zwischen Tag und Woche umschaltbar.
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 class StatsViewModel(

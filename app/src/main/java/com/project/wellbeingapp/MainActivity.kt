@@ -8,9 +8,12 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import com.project.wellbeingapp.services.TrackingService
 import com.project.wellbeingapp.ui.navigation.WellbeingNav
+import com.project.wellbeingapp.ui.paywall.PaywallGate
 import com.project.wellbeingapp.ui.permissions.PermissionGate
 import com.project.wellbeingapp.ui.theme.WellbeingAppTheme
 
@@ -28,9 +31,16 @@ class MainActivity : ComponentActivity() {
                     color = MaterialTheme.colorScheme.background
                 ) {
                     PermissionGate {
-                        // Rechte liegen vor → Tracking starten und App anzeigen.
-                        LaunchedEffect(Unit) { TrackingService.start(this@MainActivity) }
-                        WellbeingNav(container)
+                        // Rechte liegen vor → Tracking je nach Einstellung starten/stoppen.
+                        val trackingEnabled by container.appPreferences.trackingEnabled.collectAsState()
+                        LaunchedEffect(trackingEnabled) {
+                            if (trackingEnabled) TrackingService.start(this@MainActivity)
+                            else TrackingService.stop(this@MainActivity)
+                        }
+                        // Ab Level 2 blockt die Paywall, bis Premium gekauft ist.
+                        PaywallGate(container) {
+                            WellbeingNav(container)
+                        }
                     }
                 }
             }

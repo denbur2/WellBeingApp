@@ -1,6 +1,7 @@
 package com.project.wellbeingapp.score
 
 import com.project.wellbeingapp.database.dao.AppUsageDao
+import com.project.wellbeingapp.database.dao.LocationDao
 import com.project.wellbeingapp.database.dao.ScoreHistoryDao
 import com.project.wellbeingapp.database.entity.AppUsageEntry
 import com.project.wellbeingapp.database.entity.ScoreHistoryEntry
@@ -8,7 +9,6 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flowOf
-import kotlinx.coroutines.flow.map
 import java.util.Calendar
 
 /**
@@ -21,6 +21,7 @@ import java.util.Calendar
 class DefaultScoreCalculator(
     private val appUsageDao: AppUsageDao,
     private val scoreHistoryDao: ScoreHistoryDao,
+    private val locationDao: LocationDao,
     private val bonusPoints: Flow<Int> = flowOf(0),
     private val ownPackage: String? = null,
     private val clock: () -> Long = { System.currentTimeMillis() }
@@ -32,25 +33,32 @@ class DefaultScoreCalculator(
         return combine(
             appUsageDao.getByTimeRange(queryStart, queryEnd),
             bonusPoints,
-            scoreHistoryDao.getAll()
-        ) { entries, bonus, history ->
-            // Kumulativer Score seit App-Start: archivierte Vortage (Übertrag) +
-            // heutige Fenster bis „jetzt". So zählen auch die seit App-Start
-            // verstrichenen (leeren) 10-Min-Fenster mit, nicht nur bis App-Start.
+            scoreHistoryDao.getAll(),
+            locationDao.observeEarliestTimestamp(queryStart, queryEnd)
+        ) { entries, bonus, history, earliest ->
+            // Kumulativer Score: archivierte Vortage (Übertrag) + heutige Fenster bis
+            // „jetzt". Leere (10-Min-)Fenster zählen mit, aber erst AB dem ersten
+            // getrackten Eintrag heute (`earliest`) — nicht ab Mitternacht. So startet
+            // der Score nach einem Daten-Reset bei ~0 statt rückwirkend hochzuzählen.
             val now = clock()
             val dayStart = startOfDay(now)
             val carryOver = history.filter { it.date < dayStart }.sumOf { it.score }
-            computeScore(entries, bonus, dayStart, now, baseRaw = carryOver)
+            val windowStart = earliest ?: now
+            computeScore(entries, bonus, windowStart, now, baseRaw = carryOver)
         }
     }
 
     override fun observeWindowHistory(): Flow<List<ScoreWindow>> {
         val queryStart = startOfDay(clock())
         val queryEnd = queryStart + DAY_MS
-        return appUsageDao.getByTimeRange(queryStart, queryEnd).map { entries ->
+        return combine(
+            appUsageDao.getByTimeRange(queryStart, queryEnd),
+            locationDao.observeEarliestTimestamp(queryStart, queryEnd)
+        ) { entries, earliest ->
             val now = clock()
             val byWindow = scoringEntries(entries).groupBy { it.timestamp / ScoreRules.WINDOW_MS }
-            val firstWindow = startOfDay(now) / ScoreRules.WINDOW_MS
+            // Fenster ebenfalls erst ab dem ersten getrackten Eintrag (Konsistenz mit Score).
+            val firstWindow = (earliest ?: now) / ScoreRules.WINDOW_MS
             val lastWindow = now / ScoreRules.WINDOW_MS
             (firstWindow..lastWindow).map { window ->
                 val windowEntries = byWindow[window].orEmpty()
@@ -71,7 +79,9 @@ class DefaultScoreCalculator(
         val dayStart = startOfDay(date)
         val dayEnd = dayStart + DAY_MS
         val entries = appUsageDao.getByTimeRange(dayStart, dayEnd).first()
-        val data = computeScore(entries, rangeStart = dayStart, rangeEnd = dayEnd)
+        // Fenster erst ab dem ersten getrackten Eintrag des Tages zählen.
+        val windowStart = locationDao.earliestTimestamp(dayStart, dayEnd) ?: dayStart
+        val data = computeScore(entries, rangeStart = windowStart, rangeEnd = dayEnd)
         scoreHistoryDao.insert(
             ScoreHistoryEntry(
                 date = dayStart,

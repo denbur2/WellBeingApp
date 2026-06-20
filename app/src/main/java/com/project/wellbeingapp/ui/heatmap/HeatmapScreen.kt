@@ -23,6 +23,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
@@ -41,6 +42,8 @@ import org.osmdroid.tileprovider.tilesource.TileSourceFactory
 import org.osmdroid.util.BoundingBox
 import org.osmdroid.util.GeoPoint
 import org.osmdroid.views.MapView
+import org.osmdroid.views.overlay.mylocation.GpsMyLocationProvider
+import org.osmdroid.views.overlay.mylocation.MyLocationNewOverlay
 
 /**
  * Heatmap-Screen: oben die App-Auswahl (Chips), darunter eine dezente OSMDroid-Karte
@@ -56,6 +59,9 @@ fun HeatmapScreen(
 ) {
     val context = LocalContext.current
 
+    // Immer aktueller State für Callbacks (First-Layout-Listener läuft außerhalb der Recomposition).
+    val latestState = rememberUpdatedState(state)
+
     // MapView + Overlay über Recompositions hinweg stabil halten.
     val overlay = remember { HeatmapOverlay() }
     val mapView = remember {
@@ -68,12 +74,49 @@ fun HeatmapScreen(
             cm.postConcat(dimMatrix())
             overlayManager.tilesOverlay.setColorFilter(ColorMatrixColorFilter(cm))
             overlays.add(overlay)
+            // Kamera positionieren, sobald die Karte ausgelegt ist — sonst bleibt sie
+            // bis zur nächsten Recomposition (z. B. Button-Druck) uninitialisiert.
+            addOnFirstLayoutListener { _, _, _, _, _ ->
+                overlay.setCells(latestState.value.cells)
+                fitOnce(this, latestState.value)
+                invalidate()
+            }
+        }
+    }
+
+    // Eigener Standort (blauer Punkt + „zu mir springen"); GPS erst bei Button-Druck aktiv.
+    val myLocation = remember {
+        MyLocationNewOverlay(GpsMyLocationProvider(context.applicationContext), mapView).also {
+            mapView.overlays.add(it)
         }
     }
 
     DisposableEffect(Unit) {
         mapView.onResume()
-        onDispose { mapView.onPause(); mapView.onDetach() }
+        onDispose {
+            myLocation.disableMyLocation()
+            mapView.onPause(); mapView.onDetach()
+        }
+    }
+
+    // Zentriert die Karte auf die aktuelle Position (aktiviert dafür das GPS-Overlay).
+    fun centerOnUser() {
+        myLocation.enableMyLocation()
+        val fix = myLocation.myLocation
+        if (fix != null) {
+            mapView.controller.animateTo(fix)
+            mapView.controller.setZoom(17.0)
+        } else {
+            // Noch kein Fix → auf den ersten warten und dann springen (Callback off-thread).
+            myLocation.runOnFirstFix {
+                mapView.post {
+                    myLocation.myLocation?.let {
+                        mapView.controller.animateTo(it)
+                        mapView.controller.setZoom(17.0)
+                    }
+                }
+            }
+        }
     }
 
     Column(modifier = modifier.fillMaxSize().background(TerminalBackground)) {
@@ -121,6 +164,14 @@ fun HeatmapScreen(
             } else if (state.cells.isNotEmpty()) {
                 HeatLegend()
             }
+
+            // Ortungs-Button: immer verfügbar, auch auf leerer Karte.
+            LocateButton(
+                onClick = { centerOnUser() },
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(12.dp)
+            )
         }
     }
 }
@@ -155,6 +206,24 @@ private fun BoxScope.HeatLegend() {
             Text("1 min", color = TerminalDim, style = MaterialTheme.typography.labelSmall)
             Text("60+ min", color = TerminalDim, style = MaterialTheme.typography.labelSmall)
         }
+    }
+}
+
+/** Button zum Zentrieren der Karte auf die aktuelle Position. */
+@Composable
+private fun LocateButton(onClick: () -> Unit, modifier: Modifier = Modifier) {
+    Box(
+        modifier
+            .background(TerminalBackground.copy(alpha = 0.75f))
+            .border(1.dp, TerminalGreen)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = 10.dp)
+    ) {
+        Text(
+            text = "> ORTUNG",
+            color = TerminalGreen,
+            style = MaterialTheme.typography.labelLarge
+        )
     }
 }
 

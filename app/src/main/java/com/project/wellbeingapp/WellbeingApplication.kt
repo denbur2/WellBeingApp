@@ -23,5 +23,8 @@ class WellbeingApplication : Application() {
 
         // Täglichen Score-Snapshot einplanen (idempotent).
         ScoreSnapshotWorker.schedule(this)
+
+        // Billing-Verbindung früh aufbauen, damit Preis & Kaufstatus bereitstehen.
+        container.billingManager.start()
     }
 }
