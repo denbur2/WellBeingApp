@@ -1,7 +1,10 @@
 package com.project.wellbeingapp.ui.heatmap
 
+import android.graphics.Bitmap
+import android.graphics.Canvas
 import android.graphics.ColorMatrix
 import android.graphics.ColorMatrixColorFilter
+import android.graphics.Paint
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -39,6 +42,7 @@ import com.project.wellbeingapp.ui.theme.TerminalBackground
 import com.project.wellbeingapp.ui.theme.TerminalDim
 import com.project.wellbeingapp.ui.theme.TerminalGreen
 import org.osmdroid.tileprovider.tilesource.TileSourceFactory
+import org.osmdroid.views.CustomZoomButtonsController
 import org.osmdroid.util.BoundingBox
 import org.osmdroid.util.GeoPoint
 import org.osmdroid.views.MapView
@@ -68,6 +72,8 @@ fun HeatmapScreen(
         MapView(context).apply {
             setTileSource(TileSourceFactory.MAPNIK)
             setMultiTouchControls(true)
+            // Keine +/–-Zoom-Buttons; Zoom nur per Geste.
+            zoomController.setVisibility(CustomZoomButtonsController.Visibility.NEVER)
             controller.setZoom(15.0)
             // Karte dezent: entsättigt + abgedunkelt, damit der Heat heraussticht.
             val cm = ColorMatrix().apply { setSaturation(0.25f) }
@@ -84,9 +90,15 @@ fun HeatmapScreen(
         }
     }
 
-    // Eigener Standort (blauer Punkt + „zu mir springen"); GPS erst bei Button-Druck aktiv.
+    // Eigener Standort nur zum „zu mir springen"; GPS erst bei Button-Druck aktiv.
+    // Standort als grüner Ring (App-Grün, ohne Füllung); Richtungspfeil ausgeblendet.
     val myLocation = remember {
         MyLocationNewOverlay(GpsMyLocationProvider(context.applicationContext), mapView).also {
+            val blank = Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888)
+            it.setPersonIcon(greenRingIcon(context.resources.displayMetrics.density))
+            it.setPersonAnchor(0.5f, 0.5f) // Ring auf den Standort zentrieren
+            it.setDirectionIcon(blank)
+            it.isDrawAccuracyEnabled = false // GPS-Genauigkeitskreis ausblenden
             mapView.overlays.add(it)
         }
     }
@@ -176,12 +188,13 @@ fun HeatmapScreen(
     }
 }
 
-/** Farb-Legende: zeigt die Nutzungs-Skala (Cyan = wenig → Tiefblau = viel) je Rasterzelle. */
+/** Farb-Legende: Nutzungs-Skala (Cyan = wenig → Tiefblau → Rot = sehr viel) je Rasterzelle. */
 @Composable
 private fun BoxScope.HeatLegend() {
     val low = Color(HeatColor.argb(HeatColor.MIN_MINUTES)).copy(alpha = 1f)
-    val mid = Color(HeatColor.argb((HeatColor.MIN_MINUTES + HeatColor.MAX_MINUTES) / 2f)).copy(alpha = 1f)
+    val mid = Color(HeatColor.argb(HeatColor.MAX_MINUTES / 2f)).copy(alpha = 1f)
     val high = Color(HeatColor.argb(HeatColor.MAX_MINUTES)).copy(alpha = 1f)
+    val hot = Color(HeatColor.argb(HeatColor.HOT_MINUTES)).copy(alpha = 1f)
 
     Column(
         modifier = Modifier
@@ -196,7 +209,7 @@ private fun BoxScope.HeatLegend() {
             Modifier
                 .width(140.dp)
                 .height(10.dp)
-                .background(Brush.horizontalGradient(listOf(low, mid, high)))
+                .background(Brush.horizontalGradient(listOf(low, mid, high, hot)))
         )
         Spacer(Modifier.height(2.dp))
         Row(
@@ -204,7 +217,7 @@ private fun BoxScope.HeatLegend() {
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
             Text("1 min", color = TerminalDim, style = MaterialTheme.typography.labelSmall)
-            Text("60+ min", color = TerminalDim, style = MaterialTheme.typography.labelSmall)
+            Text("2h+", color = TerminalDim, style = MaterialTheme.typography.labelSmall)
         }
     }
 }
@@ -263,6 +276,25 @@ private fun Chip(label: String, active: Boolean, onClick: () -> Unit) {
             style = MaterialTheme.typography.labelLarge
         )
     }
+}
+
+/**
+ * Zeichnet das Standort-Icon als grünen Kreis ohne Füllung (App-Grün, nur Kontur).
+ * Größe/Strichstärke skalieren mit der Display-Dichte.
+ */
+private fun greenRingIcon(density: Float): Bitmap {
+    val size = (22f * density).toInt().coerceAtLeast(14)
+    val stroke = 1.5f * density
+    val bmp = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
+    val canvas = Canvas(bmp)
+    val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeWidth = stroke
+        color = 0xFF33FF66.toInt() // TerminalGreen
+    }
+    val r = size / 2f - stroke
+    canvas.drawCircle(size / 2f, size / 2f, r, paint)
+    return bmp
 }
 
 /** Dunkelt die Tiles ab (Faktor < 1 auf RGB). */

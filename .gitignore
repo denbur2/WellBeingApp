@@ -17,3 +17,8 @@ local.properties
 # Claude Code lokale Konfiguration
 .claude/
 .kotlin/
+
+# Signierung / Keystore (NIEMALS committen!)
+*.jks
+*.keystore
+keystore.properties
